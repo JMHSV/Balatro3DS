@@ -37,12 +37,18 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           python3 --version
-          ./dev/setup.sh
+          # setup.sh can exit non-zero after the runtime is built (BUILD.md, step 5 note), so
+          # accept that exit only when the runtime it was building is actually there.
+          if ! ./dev/setup.sh; then
+            elf="$(find dev/.cache/lovepotion -name lovepotion.elf -type f | head -1)"
+            test -n "$elf" || { echo "setup.sh failed and produced no lovepotion.elf"; exit 1; }
+            echo "setup.sh exited non-zero, but the runtime was built: $elf"
+          fi
 
       # Print how the runtime names the save folder, so the artifact's claim is checked
       # against the source rather than assumed.
       - name: Save identity rule
-        run: grep -rn -i -B2 -A8 "setIdentity" dev/.cache/lovepotion/platform/ctr/romfs dev/.cache/lovepotion/source/modules/love/scripts 2>/dev/null | head -80 || true
+        run: grep -rn -B6 -A3 "setIdentity" dev/.cache/lovepotion --include=*.lua --include=*.cpp --include=*.hpp --include=*.h | grep -v "/build" | head -120 || true
 
       - name: Build .3dsx
         run: |
