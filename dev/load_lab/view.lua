@@ -11,9 +11,10 @@
 --- alters them. Lua entries come from a stage directory that `stage.py` writes from the working
 --- tree under the build's own staging rules, so both drivers run exactly the Lua that ships.
 ---
---- When the build bundles modules, the stage holds `modules.luab` instead of most .lua files, as
---- the package does. The view then reads the bundle with the stage's own module_bundle.lua, and
---- a bundled module exists only through `view.bundle`: as a file, it is absent, as on the console.
+--- When the build bundles, the stage holds `game.bundle` instead of most .lua files and the
+--- bundled cues, as the package does. The view then reads the bundle with the stage's own
+--- bundle.lua, and a bundled file exists only through `view.bundle`: as a file, it is absent, as
+--- on the console. The stage's bundled cues are placeholders of the shipped size, not sound.
 local View = {}
 
 --- The path the runtime opens for a path the game names (`include/utilities/functions.hpp`
@@ -24,13 +25,11 @@ function View.console_path(path)
     return path
 end
 
---- Build a view.
----@param read_manifest fun(): string the text of package_baseline.tsv
---- The stage's module bundle, or nil: { path, index, find, read(path) -> bytes|nil }.
+--- The stage's bundle, or nil: { path, size, index, find, read(path) -> bytes|nil }.
 local function open_bundle(read_stage)
-    local loader_src = read_stage("module_bundle.lua")
+    local loader_src = read_stage("bundle.lua")
     if not loader_src then return nil end
-    local Bundle = assert(loadstring(loader_src, "@module_bundle.lua"))()
+    local Bundle = assert(loadstring(loader_src, "@bundle.lua"))()
     local data = read_stage(Bundle.PATH)
     if not data then return nil end
     local function read(offset, size)
@@ -51,6 +50,8 @@ local function open_bundle(read_stage)
     }
 end
 
+--- Build a view.
+---@param read_manifest fun(): string the text of package_baseline.tsv
 ---@param read_stage fun(path: string): string|nil a staged file's bytes, or nil
 ---@return table view
 function View.new(read_manifest, read_stage)
@@ -89,9 +90,17 @@ function View.new(read_manifest, read_stage)
 
     local view = {}
 
-    --- nil when the build does not bundle modules.
+    --- nil when the build does not bundle.
     view.bundle = open_bundle(read_stage)
-    if view.bundle then add_dirs(view.bundle.path) end
+    if view.bundle then
+        add_dirs(view.bundle.path)
+        for path in pairs(view.bundle.index) do
+            if path:sub(-4) ~= ".lua" then
+                assert(assets[path], "load lab: the bundle holds " .. path .. ", which the package baseline lacks")
+                assets[path] = nil
+            end
+        end
+    end
 
     --- Size of a shipped file, or nil when the console package has no such file.
     function view.size(path)

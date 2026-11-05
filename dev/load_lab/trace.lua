@@ -114,22 +114,34 @@ end
 --- LÖVE's own loader does (each `?` template of the require path in turn, one existence probe
 --- per template tried) but against `view`, so a module is found where the console would find it.
 ---
---- When the view has a module bundle, the searcher also stands in for module_bundle.lua. Its
---- real `install` would open the bundle through love.filesystem, which on the desktop is the
---- working tree, so it is replaced by one that does what the console's does: one probe, one
---- open and a read of the index. From then on a module in the bundle is resolved by the real
---- `Bundle.find` and fetched with a read and no probe, as the bundle's own searcher does.
+--- The searcher also stands in for bundle.lua. Its real `install` would open the bundle through
+--- love.filesystem, which on the desktop is the working tree, so it is replaced by one that does
+--- what the console's does: one probe, then with a bundle one open and a read of the index. From
+--- then on a module in the bundle is resolved by the real `Bundle.find` and fetched with a read
+--- and no probe, as the bundle's own searcher does; `Bundle.has` and `Bundle.read` answer from
+--- the view's bundle, and each read is recorded.
 ---@param view table see view.lua
 ---@param require_path string e.g. "?.lua;?/init.lua"
-function Trace.install_searcher(view, require_path)
+---@param bundled_bytes (fun(path: string): string)|nil what `Bundle.read` hands the game for a
+---  bundled file; the view's bytes by default. The LÖVE driver passes the desktop's sound for a cue.
+function Trace.install_searcher(view, require_path, bundled_bytes)
+    bundled_bytes = bundled_bytes or function(path) return view.bundle.read(path) end
     local bundled = false
-    Trace.on_loaded("module_bundle", function(Bundle)
+    Trace.on_loaded("bundle", function(Bundle)
         Bundle.install = function()
             Trace.event("stat", Bundle.PATH, view.bundle and "hit" or "miss")
             if not view.bundle then return false end
             Trace.event("open", Bundle.PATH, view.bundle.size, "bundle_index")
             bundled = true
             return true
+        end
+        Bundle.has = function(path)
+            return bundled and view.bundle.index[path] ~= nil
+        end
+        Bundle.read = function(path)
+            if not Bundle.has(path) then return nil end
+            Trace.event("bundle_read", path)
+            return (assert(bundled_bytes(path), "load lab: no bytes for bundled " .. path))
         end
     end)
 
@@ -150,7 +162,7 @@ function Trace.install_searcher(view, require_path)
         if view.bundle then
             local path = view.bundle.find(name)
             if path and not bundled then
-                error("load lab: " .. name .. " is required before main.lua installs the module bundle", 0)
+                error("load lab: " .. name .. " is required before main.lua installs the game bundle", 0)
             end
             if path then
                 Trace.event("bundle_read", path)

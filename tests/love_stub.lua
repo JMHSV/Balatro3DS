@@ -444,6 +444,20 @@ function stub.install()
                 if not c then return nil, "file not found" end
                 return c, #c
             end,
+            --- The in-memory form only, `newFileData(contents, name)`: sfx.lua makes one from a
+            --- bundled cue's bytes. The path form would need the stub's virtual files.
+            newFileData = function(contents, name)
+                assert(type(contents) == "string" and type(name) == "string",
+                    "love_stub: only newFileData(contents, name) is stubbed")
+                return {
+                    _stub = "FileData",
+                    getString = function() return contents end,
+                    getFilename = function() return name end,
+                    getSize = function() return #contents end,
+                    type = function() return "FileData" end,
+                    typeOf = function(_, t) return t == "FileData" or t == "Data" end,
+                }
+            end,
             --- Mirrors love.filesystem.load: compiles the file and returns the chunk,
             --- or nil plus a message. The game calls the chunk to get its save table.
             load = function(path)

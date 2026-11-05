@@ -5,12 +5,15 @@ what ships. That list is read from build.sh itself rather than restated here, so
 drift. On CI the working tree is a clean checkout, so the files considered are the ones git
 knows about: tracked, plus untracked-but-not-ignored (a new module in a step being measured).
 
-Only .lua files are staged. Everything else in the package comes from `package_baseline.tsv`.
+Only .lua files are staged. Everything else in the package comes from `package_baseline.tsv`,
+except that the files build.sh bundles beside the modules (the short cues) are staged as
+placeholders: zero bytes, at the size the baseline lists, so the bundle has its real layout.
 
 The build's own Lua packaging steps run here too, by the same scripts, when build.sh calls them:
 `dev/luac_3ds.py` (precompile, with the luac named by the `LUAC51` environment variable; any Lua
 5.1.5 luac works, because it rewrites a 64-bit host's output into the console's layout) and
-`dev/lua_bundle.py` (pack modules into one file). Two stages are written:
+`dev/bundle.py` (pack modules and the named files into one file), with build.sh's own patterns.
+Two stages are written:
 
     stage/      what ships: bytecode when the build precompiles (the PUC driver)
     stage_src/  the same packaging, but source (the LÖVE driver; LuaJIT cannot load PUC bytecode)
@@ -21,6 +24,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -28,8 +32,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "dev"))
-import lua_bundle  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bundle  # noqa: E402
 import luac_3ds  # noqa: E402
+import package_model  # noqa: E402
 
 BUILD_SH = REPO / "dev" / "build.sh"
 CONFIG_SH = REPO / "dev" / "config.sh"
@@ -105,9 +111,15 @@ def build_precompiles(build_sh: str) -> bool:
     return re.search(r'luac_3ds\.py" "\$HOST_LUAC" "\$STAGE_DIR"', build_sh) is not None
 
 
-def build_bundles(build_sh: str) -> bool:
-    """Whether build.sh's packaging runs dev/lua_bundle.py over the stage."""
-    return re.search(r'lua_bundle\.py" "\$STAGE_DIR"', build_sh) is not None
+def bundle_patterns(build_sh: str) -> list[str] | None:
+    """The patterns build.sh's packaging runs dev/bundle.py with, or None if it does not."""
+    m = re.search(r'bundle\.py" "\$STAGE_DIR"([^\n>]*)', build_sh)
+    if m is None:
+        return None
+    patterns = shlex.split(m.group(1))
+    if any(not p.lstrip("!") or "$" in p for p in patterns):
+        raise ValueError(f"cannot read bundle.py's patterns from build.sh: {m.group(1)!r}")
+    return patterns
 
 
 def _write(dest: Path, files: dict[str, bytes]) -> None:
@@ -128,20 +140,31 @@ def _list(dest: Path) -> None:
 def shipped_files(dest: Path) -> dict[str, bytes]:
     """The stage's Lua as files in the package: loose .lua, and the bundle if there is one."""
     out = {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob("*.lua")}
-    if (dest / lua_bundle.BUNDLE).exists():
-        out[lua_bundle.BUNDLE] = (dest / lua_bundle.BUNDLE).read_bytes()
+    if (dest / bundle.BUNDLE).exists():
+        out[bundle.BUNDLE] = (dest / bundle.BUNDLE).read_bytes()
     return out
+
+
+def read_bundle(dest: Path) -> dict[str, bytes]:
+    """Every file in the stage's bundle by its path; empty when it has none."""
+    target = dest / bundle.BUNDLE
+    return bundle.decode(target.read_bytes()) if target.exists() else {}
 
 
 def read_stage(dest: Path) -> dict[str, bytes]:
     """Every Lua file in the stage by its path, whether loose or in the bundle."""
     out = {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob("*.lua")}
-    if (dest / lua_bundle.BUNDLE).exists():
-        bundled = lua_bundle.decode((dest / lua_bundle.BUNDLE).read_bytes())
-        if set(bundled) & set(out):
-            raise ValueError(f"{dest} has modules both loose and in its bundle")
-        out.update(bundled)
+    bundled = {p: b for p, b in read_bundle(dest).items() if p.endswith(".lua")}
+    if set(bundled) & set(out):
+        raise ValueError(f"{dest} has modules both loose and in its bundle")
+    out.update(bundled)
     return out
+
+
+def bundled_assets(patterns: list[str]) -> dict[str, bytes]:
+    """Placeholders for the package files other than Lua that `patterns` put in the bundle."""
+    return {path: bytes(size) for path, (size, _) in package_model.read_manifest().items()
+            if not path.endswith(".lua") and bundle.selected(path, patterns)}
 
 
 def write_stage(out: Path) -> tuple[dict[str, bytes], dict[str, bytes]]:
@@ -150,18 +173,25 @@ def write_stage(out: Path) -> tuple[dict[str, bytes], dict[str, bytes]]:
     Lua file by path as (source, shipped)."""
     build_sh = BUILD_SH.read_text(encoding="utf-8")
     source = staged_lua()
-    _write(out / "stage_src", source)
-    _write(out / "stage", source)
+    patterns = bundle_patterns(build_sh)
+    assets = bundled_assets(patterns) if patterns is not None else {}
+    _write(out / "stage_src", {**source, **assets})
+    _write(out / "stage", {**source, **assets})
     if build_precompiles(build_sh):
         luac = os.environ.get("LUAC51")
         if not luac:
             raise ValueError("build.sh precompiles Lua; set LUAC51 to a Lua 5.1.5 luac")
         luac_3ds.compile_stage(luac, out / "stage")
-    if build_bundles(build_sh):
-        lua_bundle.bundle_stage(out / "stage_src")
-        lua_bundle.bundle_stage(out / "stage")
+    if patterns is not None:
+        bundle.bundle_stage(out / "stage_src", patterns)
+        bundle.bundle_stage(out / "stage", patterns)
     for name in ("stage_src", "stage"):
         _list(out / name)
+        loose = {p.relative_to(out / name).as_posix() for p in (out / name).rglob("*") if p.is_file()}
+        if loose & set(assets):
+            raise ValueError(f"{out / name}: placeholders left outside the bundle: {sorted(loose & set(assets))}")
+        if {p for p in read_bundle(out / name) if not p.endswith(".lua")} != set(assets):
+            raise ValueError(f"{out / name}: the bundle's other files are not the placeholders")
     if read_stage(out / "stage_src") != source:
         raise ValueError("bundling changed the source stage")
     shipped = read_stage(out / "stage")

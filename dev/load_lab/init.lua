@@ -135,7 +135,7 @@ local function install_wrappers(view, raw)
         if not src then
             -- The desktop would load the tree's copy, but the console has no such file.
             assert(not (view.bundle and view.bundle.index[path]),
-                "load lab: love.filesystem.load of " .. path .. ", which ships only inside the module bundle")
+                "load lab: love.filesystem.load of " .. path .. ", which ships only inside the game bundle")
             Trace.event("stat", path, "miss")
             return raw.load(path)
         end
@@ -146,6 +146,15 @@ local function install_wrappers(view, raw)
     for _, name in ipairs({ "newFileData", "lines", "newFile" }) do
         local original = raw[name]
         fs[name] = function(path, ...)
+            if name == "newFileData" and type(select(1, ...)) == "string" then
+                -- newFileData(contents, name) opens nothing. A bundled cue comes as the desktop's
+                -- .ogg bytes (see bundled_bytes), and LÖVE picks the decoder by the name's suffix.
+                local data_name = ...
+                if data_name:match("^resources/sounds/.+%.wav$") and path:sub(1, 4) == "OggS" then
+                    data_name = data_name:sub(1, -5) .. ".ogg"
+                end
+                return original(path, data_name, select(2, ...))
+            end
             if Trace.recording() and type(path) == "string" then
                 local size = view.size(path)
                 Trace.event(size and "open" or "stat", path, size or "miss", name)
@@ -304,7 +313,13 @@ function Lab.install(argv)
         -- An Old 3DS, as the Pixel Lab runs by default.
         Console.is_new_3ds = function() return false end
     end)
-    Trace.install_searcher(view, fs.getRequirePath())
+    -- A bundled cue is a placeholder in the stage, so the game is handed the desktop's sound.
+    local function bundled_bytes(path)
+        if not path:match("^resources/sounds/.+%.wav$") then return view.bundle.read(path) end
+        local stand_in = desktop_stand_in(path, function(p) return raw.getInfo(p, "file") ~= nil end)
+        return (assert(stand_in and raw.read(stand_in), "load lab: no desktop stand-in for " .. path))
+    end
+    Trace.install_searcher(view, fs.getRequirePath(), bundled_bytes)
     install_wrappers(view, raw)
 
     Trace.phase("boot")
@@ -314,7 +329,7 @@ function Lab.install(argv)
         Trace.event("open", path, view.size(path), "compile")
         Trace.compiled_elsewhere(path, assert(view.size(path), path .. " not in the console view"))
     end
-    -- main.lua installs the module bundle before it requires nest, so with a bundle the console
+    -- main.lua installs the game bundle before it requires nest, so with a bundle the console
     -- reads nest from it.
     if view.bundle then
         Trace.event("bundle_read", "nest/init.lua")

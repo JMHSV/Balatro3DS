@@ -340,26 +340,28 @@ precompile_lua() {
     python3 "$DEV_DIR/luac_3ds.py" "$HOST_LUAC" "$STAGE_DIR" >/dev/null
 }
 
-# Pack every module but main.lua, conf.lua and module_bundle.lua into modules.luab, which
-# module_bundle.lua serves require from: one open at boot instead of one per module.
-bundle_lua() {
-    info "bundling Lua modules"
-    python3 "$DEV_DIR/lua_bundle.py" "$STAGE_DIR" >/dev/null
+# Pack every module but main.lua, conf.lua and bundle.lua into game.bundle, with the short
+# PCM cues, which sfx.lua decodes whole at boot. bundle.lua serves require and the cues from
+# it: one open at boot instead of one per module and one per cue. The ambient beds stay files,
+# because sfx.lua streams them (see the WAV conversion above).
+bundle_game() {
+    info "bundling Lua modules and sound cues"
+    python3 "$DEV_DIR/bundle.py" "$STAGE_DIR" 'resources/sounds/*.wav' '!resources/sounds/ambient*' >/dev/null
 }
 
 build_3dsx() {
     prepare_build_info 3dsx
     precompile_lua
-    bundle_lua
+    bundle_game
     info "packaging .3dsx"
     # Textures, PCM cues and Vorbis are stored, not deflated. They barely compress (tex3ds
     # already packs a .t3x; zip saves 15% on them and on .wav, nothing on .ogg), so deflate
     # only adds an inflate of every byte on load. A deflated stream is worse still: vorbisfile
     # seeks to the end on open, and PhysFS inflates its way there. Fonts compress 4-10x and stay
     # deflated, because reading the difference would cost more than inflating it, and so do the
-    # three loose .lua files. The module bundle is stored because module_bundle.lua seeks in it,
-    # and a backward seek in a deflated entry inflates it again from the start.
-    ( cd "$STAGE_DIR" && rm -f "$BUILD_DIR/game.love" && zip -qr -n .t3x:.wav:.ogg:.luab "$BUILD_DIR/game.love" . )
+    # three loose .lua files. The game bundle is stored because bundle.lua seeks in it, and a
+    # backward seek in a deflated entry inflates it again from the start.
+    ( cd "$STAGE_DIR" && rm -f "$BUILD_DIR/game.love" && zip -qr -n .t3x:.wav:.ogg:.bundle "$BUILD_DIR/game.love" . )
     3dsxtool "$ELF" "$BUILD_DIR/base.3dsx" \
         --smdh="$SMDH" \
         --romfs="$LOVEPOTION_DIR/platform/ctr/romfs"
@@ -379,7 +381,7 @@ build_cia() {
 
     prepare_build_info cia
     precompile_lua
-    bundle_lua
+    bundle_game
 
     local romfs="$BUILD_DIR/romfs" banner_audio="$DEV_DIR/cia/banner.wav"
 

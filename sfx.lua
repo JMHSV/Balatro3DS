@@ -6,6 +6,8 @@
 --- and so shares core 0 with the game; and `AudioPool::Update` holds the pool mutex across
 --- a whole decode, which `Source::Play` then blocks on. Treat mixing as main-thread work.
 
+local Bundle = require("bundle")
+
 local M = {}
 
 local SOUND_DIR = "resources/sounds/"
@@ -70,17 +72,28 @@ end
 --- are a twentieth of the size and desktop has cycles to burn. WAV costs romfs bytes and
 --- buys back the decode entirely — a static cue becomes a memcpy instead of ~15 ms of
 --- Tremor at load, and a streamed bed stops competing with the soundtrack for the ARM11.
---- `dev/build.sh` does the conversion, so resolve per cue and cache the answer.
+--- `dev/build.sh` does the conversion, so resolve per cue and cache the answer. It also packs
+--- the short cues into the game bundle, and a cue found there costs no probe.
 local path_cache = {}
 local function sound_path(code)
     local path = path_cache[code]
     if path then return path end
     path = SOUND_DIR .. code .. ".wav"
     local fs = love and love.filesystem
-    if not (fs and fs.getInfo and fs.getInfo(path)) then
+    if not (Bundle.has(path) or (fs and fs.getInfo and fs.getInfo(path))) then
         path = SOUND_DIR .. code .. ".ogg"
     end
     path_cache[code] = path
+    return path
+end
+
+--- What love.sound and love.audio load a cue from: its bytes when it is bundled, else its path.
+---@param code string
+---@return love.FileData|string
+local function cue_file(code)
+    local path = sound_path(code)
+    local bytes = Bundle.read(path)
+    if bytes then return love.filesystem.newFileData(bytes, path) end
     return path
 end
 
@@ -93,7 +106,7 @@ local function sound_data(code)
     if sd ~= nil then return sd end
     sd = false
     if love and love.sound and love.sound.newSoundData then
-        local ok, res = pcall(love.sound.newSoundData, sound_path(code))
+        local ok, res = pcall(love.sound.newSoundData, cue_file(code))
         if ok and res then sd = res end
     end
     data[code] = sd
@@ -114,14 +127,13 @@ end
 ---@return love.Source|nil
 local function new_voice(code)
     if not (love and love.audio and love.audio.newSource) then return nil end
-    local path = sound_path(code)
     if sound_data(code) then
         local ok, src = pcall(love.audio.newSource, data[code], "static")
         if ok and src then return src end
         -- SoundData sources are not supported here; drop the decode, it is dead weight.
         free_sound_data(code)
     end
-    local ok, src = pcall(love.audio.newSource, path, "static")
+    local ok, src = pcall(love.audio.newSource, cue_file(code), "static")
     if ok and src then return src end
     return nil
 end

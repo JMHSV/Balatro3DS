@@ -71,7 +71,9 @@ def read_manifest() -> dict[str, tuple[int, int]]:
     return out
 
 
-def build(lua: dict[str, bytes], build_sh: str) -> dict[str, Entry]:
+def build(lua: dict[str, bytes], build_sh: str, bundled: set[str] = frozenset()) -> dict[str, Entry]:
+    """Every file in game.love. `lua`: the shipped Lua files, the bundle among them if the build
+    bundles; `bundled`: the paths inside that bundle, which are not files in the package."""
     store_all, suffixes = zip_options(build_sh)
     entries: dict[str, Entry] = {}
 
@@ -80,7 +82,7 @@ def build(lua: dict[str, bytes], build_sh: str) -> dict[str, Entry]:
         entries[path] = Entry(path, size, size if store else deflated_size, not store)
 
     for path, (size, deflated_size) in read_manifest().items():
-        if not path.endswith(".lua"):
+        if not path.endswith(".lua") and path not in bundled:
             add(path, size, deflated_size)
     for path, data in lua.items():
         add(path, len(data), deflate_size(data))

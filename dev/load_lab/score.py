@@ -33,7 +33,7 @@ sys.path.insert(0, str(HERE))
 
 import package_model  # noqa: E402
 import stage  # noqa: E402
-import lua_bundle  # noqa: E402  (dev/, which stage puts on the path)
+import bundle as game_bundle  # noqa: E402  (dev/, which stage puts on the path)
 
 # --- weights (fixed; see the module docstring) ---------------------------------------------
 
@@ -124,10 +124,10 @@ PART_ORDER = ("stat", "open", "read", "inflate", "texture", "decode", "save_writ
 def io_parts(love: Trace, pkg: dict[str, package_model.Entry], bundle: bytes | None,
              cia: bool) -> dict[str, Parts]:
     """File, texture and save costs per phase. `cia`: RomFS, plain files, nothing to inflate.
-    `bundle`: the shipped modules.luab, or None."""
+    `bundle`: the shipped game.bundle, or None."""
     out = {p: Parts() for p in PHASES}
     textures = []
-    bundled = lua_bundle.decode(bundle) if bundle is not None else {}
+    bundled = game_bundle.decode(bundle) if bundle is not None else {}
 
     def read(p: Parts, nbytes: int) -> None:
         p.ms["read"] += ms_for(nbytes, READ_MIB_S)
@@ -143,7 +143,7 @@ def io_parts(love: Trace, pkg: dict[str, package_model.Entry], bundle: bytes | N
             # The loader keeps the bundle open and seeks in it, so it must be stored.
             if e.deflated and not cia:
                 raise ValueError(f"{path} is deflated in game.love; the bundle loader seeks in it")
-            read(p, lua_bundle.index_bytes(bundle))
+            read(p, game_bundle.index_bytes(bundle))
             return
         stored = e.size if cia else e.stored
         inflate = 0 if cia or not e.deflated else e.size
@@ -253,12 +253,12 @@ def report(out: Path) -> str:
         raise ValueError(f"{out / 'stage'} is not packaged the way build.sh packages it; "
                          "rerun `score.py stage`")
     shipped = stage.shipped_files(out / "stage")
-    bundle = shipped.get(lua_bundle.BUNDLE)
-    if (bundle is not None) != stage.build_bundles(build_sh):
+    bundle = shipped.get(game_bundle.BUNDLE)
+    if (bundle is not None) != (stage.bundle_patterns(build_sh) is not None):
         raise ValueError(f"{out / 'stage'} is not bundled the way build.sh bundles it; "
                          "rerun `score.py stage`")
-    bundled = lua_bundle.decode(bundle) if bundle is not None else {}
-    pkg = package_model.build(shipped, build_sh)
+    bundled = game_bundle.decode(bundle) if bundle is not None else {}
+    pkg = package_model.build(shipped, build_sh, set(bundled))
     cia_pkg = pkg
 
     def shipped_size(path: str) -> int:
