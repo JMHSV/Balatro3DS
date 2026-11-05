@@ -1,0 +1,57 @@
+name: 3ds test build
+
+# A .3dsx for trying a branch on hardware, built with the repo's own dev/setup.sh and
+# dev/build.sh inside devkitPro's container. It is renamed so it saves to its own folder
+# (sdmc:/3ds/save/<name>/) and never touches an installed release's save.
+on:
+  push:
+    branches: [ci/3ds-test-build]
+  workflow_dispatch:
+
+env:
+  BUILD_NAME: Balatro3DS-pixel
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    timeout-minutes: 60
+    steps:
+      - name: Host tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends sudo git curl ca-certificates unzip zip rsync \
+            cmake ninja-build ffmpeg vorbis-tools perl make g++
+
+      - uses: actions/checkout@v4
+
+      # patch_lovepotion.py needs Python 3.13; the container's Debian ships an older one.
+      - name: Python 3.13 with fontTools
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          "$HOME/.local/bin/uv" venv --python 3.13 "$HOME/py"
+          "$HOME/.local/bin/uv" pip install --python "$HOME/py/bin/python" fonttools
+          echo "$HOME/py/bin" >> "$GITHUB_PATH"
+
+      - name: Patched LövePotion runtime
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 --version
+          ./dev/setup.sh
+
+      # Print how the runtime names the save folder, so the artifact's claim is checked
+      # against the source rather than assumed.
+      - name: Save identity rule
+        run: grep -rn -i -B2 -A8 "setIdentity" dev/.cache/lovepotion/platform/ctr/romfs dev/.cache/lovepotion/source/modules/love/scripts 2>/dev/null | head -80 || true
+
+      - name: Build .3dsx
+        run: |
+          ./dev/build.sh 3dsx
+          mv dev/dist/Balatro3DS.3dsx "dev/dist/$BUILD_NAME.3dsx"
+          ls -la dev/dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUILD_NAME }}-${{ github.sha }}
+          path: dev/dist/${{ env.BUILD_NAME }}.3dsx
+          if-no-files-found: error
