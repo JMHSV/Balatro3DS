@@ -33,6 +33,7 @@ sys.path.insert(0, str(HERE))
 
 import package_model  # noqa: E402
 import stage  # noqa: E402
+import lua_bundle  # noqa: E402  (dev/, which stage puts on the path)
 
 # --- weights (fixed; see the module docstring) ---------------------------------------------
 
@@ -120,10 +121,17 @@ PART_ORDER = ("stat", "open", "read", "inflate", "texture", "decode", "save_writ
               "lua_compile", "lua_exec")
 
 
-def io_parts(love: Trace, pkg: dict[str, package_model.Entry], cia: bool) -> dict[str, Parts]:
-    """File, texture and save costs per phase. `cia`: RomFS, plain files, nothing to inflate."""
+def io_parts(love: Trace, pkg: dict[str, package_model.Entry], bundle: bytes | None,
+             cia: bool) -> dict[str, Parts]:
+    """File, texture and save costs per phase. `cia`: RomFS, plain files, nothing to inflate.
+    `bundle`: the shipped modules.luab, or None."""
     out = {p: Parts() for p in PHASES}
     textures = []
+    bundled = lua_bundle.decode(bundle) if bundle is not None else {}
+
+    def read(p: Parts, nbytes: int) -> None:
+        p.ms["read"] += ms_for(nbytes, READ_MIB_S)
+        p.nbytes["read"] += nbytes
 
     def fetch(p: Parts, path: str, how: str) -> None:
         e = pkg.get(path)
@@ -131,12 +139,17 @@ def io_parts(love: Trace, pkg: dict[str, package_model.Entry], cia: bool) -> dic
             raise ValueError(f"trace opens {path}, which the package model does not have")
         p.ms["open"] += OPEN_MS
         p.count["open"] += 1
+        if how == "bundle_index":
+            # The loader keeps the bundle open and seeks in it, so it must be stored.
+            if e.deflated and not cia:
+                raise ValueError(f"{path} is deflated in game.love; the bundle loader seeks in it")
+            read(p, lua_bundle.index_bytes(bundle))
+            return
         stored = e.size if cia else e.stored
         inflate = 0 if cia or not e.deflated else e.size
         if how == "stream" and not inflate:
             stored = min(stored, STREAM_PREFETCH)
-        p.ms["read"] += ms_for(stored, READ_MIB_S)
-        p.nbytes["read"] += stored
+        read(p, stored)
         p.ms["inflate"] += ms_for(inflate, INFLATE_MIB_S)
         p.nbytes["inflate"] += inflate
 
@@ -145,6 +158,12 @@ def io_parts(love: Trace, pkg: dict[str, package_model.Entry], cia: bool) -> dic
         if kind in ("stat", "list"):
             p.ms["stat"] += STAT_MS
             p.count["stat"] += 1
+        elif kind == "bundle_read":
+            # A seek and a read on the bundle's open handle: no probe, no open, nothing to inflate.
+            if path not in bundled:
+                raise ValueError(f"trace reads {path} from the bundle, which does not hold it")
+            read(p, len(bundled[path]))
+            p.count["bundle_read"] += 1
         elif kind == "open":
             if a in ("missing", "miss"):
                 p.ms["stat"] += STAT_MS
@@ -233,8 +252,20 @@ def report(out: Path) -> str:
     if precompiled != want:
         raise ValueError(f"{out / 'stage'} is not packaged the way build.sh packages it; "
                          "rerun `score.py stage`")
-    pkg = package_model.build(lua, build_sh)
+    shipped = stage.shipped_files(out / "stage")
+    bundle = shipped.get(lua_bundle.BUNDLE)
+    if (bundle is not None) != stage.build_bundles(build_sh):
+        raise ValueError(f"{out / 'stage'} is not bundled the way build.sh bundles it; "
+                         "rerun `score.py stage`")
+    bundled = lua_bundle.decode(bundle) if bundle is not None else {}
+    pkg = package_model.build(shipped, build_sh)
     cia_pkg = pkg
+
+    def shipped_size(path: str) -> int:
+        return len(bundled[path]) if path in bundled else pkg[path].size
+
+    def zip_size(path: str) -> int:
+        return len(bundled[path]) if path in bundled else pkg[path].stored
 
     love = read_trace(out / "trace.txt")
     time_runs = [read_trace(p) for p in sorted(out.glob("puc_time_*.txt"))]
@@ -249,9 +280,9 @@ def report(out: Path) -> str:
     check_drivers_agree(love, time_runs[0])
     puc = median_runs(time_runs)
 
-    parts, textures = io_parts(love, pkg, cia=False)
+    parts, textures = io_parts(love, pkg, bundle, cia=False)
     lua_parts(puc, parts)
-    cia_parts, _ = io_parts(love, cia_pkg, cia=True)
+    cia_parts, _ = io_parts(love, cia_pkg, bundle, cia=True)
     lua_parts(puc, cia_parts)
 
     def total(ps):
@@ -273,14 +304,14 @@ def report(out: Path) -> str:
 
     lines.append("summary\tboot\thand")
     def lua_bytes(ph, bytecode):
-        return sum(pkg[m["path"]].size for m in love.modules
+        return sum(shipped_size(m["path"]) for m in love.modules
                    if m["phase"] == ph and (m["path"] in precompiled) == bytecode)
     def lua_count(ph):
         return sum(1 for m in love.modules if m["phase"] == ph)
     lines.append(f"lua_modules\t{lua_count('boot')}\t{lua_count('hand')}")
     lines.append(f"lua_source_bytes_compiled\t{lua_bytes('boot', False)}\t{lua_bytes('hand', False)}")
     lines.append(f"lua_bytecode_bytes_loaded\t{lua_bytes('boot', True)}\t{lua_bytes('hand', True)}")
-    for label, key in (("files_opened", "open"), ("stats", "stat")):
+    for label, key in (("files_opened", "open"), ("stats", "stat"), ("bundle_reads", "bundle_read")):
         lines.append(f"{label}\t{parts['boot'].count[key]}\t{parts['hand'].count[key]}")
     for label, key in (("bytes_read", "read"), ("bytes_inflated", "inflate"), ("texture_bytes_decoded", "decode")):
         lines.append(f"{label}\t{parts['boot'].nbytes[key]}\t{parts['hand'].nbytes[key]}")
@@ -294,10 +325,9 @@ def report(out: Path) -> str:
     lines.append("module\tphase\tshipped_bytes\tzip_bytes\tload_ms\tself_exec_ms")
     for m in love.modules:
         p = m["path"]
-        e = pkg[p]
         c = puc["bench"].get(p, 0.0) * LUA_CPU_FACTOR * 1000
         s = puc["self"].get(p, 0.0) * LUA_CPU_FACTOR * 1000
-        lines.append(f"{p}\t{m['phase']}\t{e.size}\t{e.stored}\t{c:.1f}\t{s:.0f}")
+        lines.append(f"{p}\t{m['phase']}\t{shipped_size(p)}\t{zip_size(p)}\t{c:.1f}\t{s:.0f}")
     lines.append("")
 
     lines.append("texture\tphase\twidth\theight\tdecoded_bytes")
@@ -307,7 +337,7 @@ def report(out: Path) -> str:
 
     lines.append("file_opened\tphase\thow\tsize\tzip_bytes\tdeflated")
     for ph, kind, path, a, b in love.events:
-        if kind == "open" and a not in ("missing", "miss") and b != "compile":
+        if kind == "open" and a not in ("missing", "miss") and b not in ("compile", "bundle_index"):
             e = pkg[path]
             lines.append(f"{path}\t{ph}\t{b}\t{e.size}\t{e.stored}\t{'yes' if e.deflated else 'no'}")
     return "\n".join(lines) + "\n"

@@ -7,6 +7,10 @@ if type(arg) == "table" then
     end
 end
 
+-- A console build packs the other modules into one file (`module_bundle.lua`); from here on
+-- `require` reads them from it. A desktop tree has no bundle, and this returns false.
+require("module_bundle").install()
+
 local raw_print = print
 function print(...)
     if G and G.DEBUG then

@@ -133,6 +133,9 @@ local function install_wrappers(view, raw)
         end
         local src = view.read(path)
         if not src then
+            -- The desktop would load the tree's copy, but the console has no such file.
+            assert(not (view.bundle and view.bundle.index[path]),
+                "load lab: love.filesystem.load of " .. path .. ", which ships only inside the module bundle")
             Trace.event("stat", path, "miss")
             return raw.load(path)
         end
@@ -311,10 +314,17 @@ function Lab.install(argv)
         Trace.event("open", path, view.size(path), "compile")
         Trace.compiled_elsewhere(path, assert(view.size(path), path .. " not in the console view"))
     end
-    Trace.event("stat", "nest.lua", "miss")
-    Trace.event("stat", "nest/init.lua", "hit")
-    Trace.event("open", "nest/init.lua", view.size("nest/init.lua"), "compile")
-    Trace.compiled_elsewhere("nest/init.lua", view.size("nest/init.lua"))
+    -- main.lua installs the module bundle before it requires nest, so with a bundle the console
+    -- reads nest from it.
+    if view.bundle then
+        Trace.event("bundle_read", "nest/init.lua")
+        Trace.compiled_elsewhere("nest/init.lua", #assert(view.bundle.read("nest/init.lua"), "nest not bundled"))
+    else
+        Trace.event("stat", "nest.lua", "miss")
+        Trace.event("stat", "nest/init.lua", "hit")
+        Trace.event("open", "nest/init.lua", view.size("nest/init.lua"), "compile")
+        Trace.compiled_elsewhere("nest/init.lua", view.size("nest/init.lua"))
+    end
 end
 
 --- Replace nest's run loop with a deterministic one that drives the two phases.

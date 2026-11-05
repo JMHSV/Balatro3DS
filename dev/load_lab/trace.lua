@@ -113,10 +113,50 @@ end
 --- Install a `require` searcher ahead of every other one. It resolves module names exactly as
 --- LÖVE's own loader does (each `?` template of the require path in turn, one existence probe
 --- per template tried) but against `view`, so a module is found where the console would find it.
----@param view { exists: fun(path: string): boolean, read: fun(path: string): string }
+---
+--- When the view has a module bundle, the searcher also stands in for module_bundle.lua. Its
+--- real `install` would open the bundle through love.filesystem, which on the desktop is the
+--- working tree, so it is replaced by one that does what the console's does: one probe, one
+--- open and a read of the index. From then on a module in the bundle is resolved by the real
+--- `Bundle.find` and fetched with a read and no probe, as the bundle's own searcher does.
+---@param view table see view.lua
 ---@param require_path string e.g. "?.lua;?/init.lua"
 function Trace.install_searcher(view, require_path)
+    local bundled = false
+    Trace.on_loaded("module_bundle", function(Bundle)
+        Bundle.install = function()
+            Trace.event("stat", Bundle.PATH, view.bundle and "hit" or "miss")
+            if not view.bundle then return false end
+            Trace.event("open", Bundle.PATH, view.bundle.size, "bundle_index")
+            bundled = true
+            return true
+        end
+    end)
+
+    local function loaded(name, path, src)
+        local chunk = Trace.compile(name, path, src)
+        local hook = state.on_loaded[name]
+        if hook then
+            return function(...)
+                local m = chunk(...)
+                hook(m == nil and package.loaded[name] or m)
+                return m
+            end
+        end
+        return chunk
+    end
+
     local function searcher(name)
+        if view.bundle then
+            local path = view.bundle.find(name)
+            if path and not bundled then
+                error("load lab: " .. name .. " is required before main.lua installs the module bundle", 0)
+            end
+            if path then
+                Trace.event("bundle_read", path)
+                return loaded(name, path, view.bundle.read(path))
+            end
+        end
         local rel = name:gsub("%.", "/")
         local tried = {}
         for template in require_path:gmatch("[^;]+") do
@@ -126,16 +166,7 @@ function Trace.install_searcher(view, require_path)
                 local src = view.read(path)
                 assert(src, "load lab view claims " .. path .. " exists but cannot read it")
                 Trace.event("open", path, #src, "compile")
-                local chunk = Trace.compile(name, path, src)
-                local hook = state.on_loaded[name]
-                if hook then
-                    return function(...)
-                        local m = chunk(...)
-                        hook(m == nil and package.loaded[name] or m)
-                        return m
-                    end
-                end
-                return chunk
+                return loaded(name, path, src)
             end
             tried[#tried + 1] = path
         end

@@ -27,6 +27,7 @@ package.path = "./?.lua;./?/init.lua;" .. package.path
 
 local DT = 1 / 60
 local Trace = require("dev.load_lab.trace")
+local View = require("dev.load_lab.view")
 local script = require("dev.load_lab.to_hand")
 
 local function read_file(path)
@@ -44,10 +45,8 @@ local staged = {}
 for path in listing:gmatch("[^\n]+") do
     staged[path] = assert(read_file(stage_dir .. "/" .. path), "stage lists but lacks " .. path)
 end
-local view = {
-    exists = function(path) return staged[path] ~= nil end,
-    read = function(path) return staged[path] end,
-}
+local view = View.new(function() return read_file("dev/load_lab/package_baseline.tsv") end,
+    function(path) return staged[path] end)
 
 -- Allocation accounting. With the collector stopped the heap only shrinks when something asks for
 -- a collection outright (fonts.lua does), so each such call's drop is added back.
@@ -167,7 +166,7 @@ if mode == "time" then
     local REPS = 20
     local mods = {}
     for _, m in ipairs(Trace.result().modules) do
-        if m.observed then mods[#mods + 1] = { m = m, src = assert(view.read(m.path), m.path), t = 0 } end
+        if m.observed then mods[#mods + 1] = { m = m, src = assert(view.module(m.path), m.path), t = 0 } end
     end
     for _ = 1, REPS do
         for _, e in ipairs(mods) do
