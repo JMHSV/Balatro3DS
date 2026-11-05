@@ -5,11 +5,11 @@ name: 3ds test build
 # (sdmc:/3ds/save/<name>/) and never touches an installed release's save.
 on:
   push:
-    branches: [ci/3ds-test-build]
+    branches: [ci/3ds-perf-build]
   workflow_dispatch:
 
 env:
-  BUILD_NAME: Balatro3DS-pixel
+  BUILD_NAME: Balatro3DS-perf
 
 jobs:
   build:
@@ -55,6 +55,7 @@ jobs:
           ./dev/build.sh 3dsx
           mv dev/dist/Balatro3DS.3dsx "dev/dist/$BUILD_NAME.3dsx"
           ls -la dev/dist
+          sha256sum "dev/dist/$BUILD_NAME.3dsx"
 
       - uses: actions/upload-artifact@v4
         with:
