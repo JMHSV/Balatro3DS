@@ -113,6 +113,25 @@ if (( ${#HOST_TOOLS[@]} )); then
     fi
 fi
 
+# --- host luac -------------------------------------------------------------
+# build.sh precompiles the game's Lua so the console skips the compile. The compiler has to be
+# the console's Lua version, so it is built here from the pinned upstream tarball.
+
+if [[ ! -x "$HOST_LUAC" ]]; then
+    info "building host luac $LUA51_VERSION"
+    tmp="$(mktemp -d)"
+    curl -fsSL "$LUA51_URL" -o "$tmp/lua.tar.gz" || die "failed to download $LUA51_URL"
+    printf '%s  %s\n' "$LUA51_SHA256" "$tmp/lua.tar.gz" | shasum -a 256 -c - >/dev/null \
+        || die "checksum mismatch for $LUA51_URL"
+    tar xzf "$tmp/lua.tar.gz" -C "$tmp"
+    make -s -C "$tmp/lua-$LUA51_VERSION/src" luac CC=cc >/dev/null || die "could not build luac $LUA51_VERSION"
+    mkdir -p "$(dirname "$HOST_LUAC")"
+    mv "$tmp/lua-$LUA51_VERSION/src/luac" "$HOST_LUAC"
+    rm -rf "$tmp"
+fi
+"$HOST_LUAC" -v 2>&1 | grep -q "Lua $LUA51_VERSION " || die "$HOST_LUAC is not luac $LUA51_VERSION"
+info "luac: $HOST_LUAC"
+
 # --- makerom ---------------------------------------------------------------
 
 host_slug() {

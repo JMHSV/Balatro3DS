@@ -11,3 +11,4 @@ The checks for every kept step:
 | --- | --- | --- | --- | --- |
 | 0 | Harness, baseline at 39dd0e2 | 10395 | — | baseline |
 | 1 | `zip -n .t3x:.wav:.ogg`: store textures, cues and music in game.love | 10395 → 9662 (−7.1%) | inflate 1700 → 886; read 1214 → 1196 (music stream reads 80 KiB, not 847 KB) | kept |
+| 2 | Ship Lua as console-format 5.1 bytecode (`dev/luac_3ds.py`, host luac 5.1.5 built by `setup.sh`) | 9662 → 6317 (−34.6%) | lua_compile 3955 → 635 (undump, not compile); read 1196 → 1240 and inflate 886 → 897 (bytecode is 2.49 MB against 2.42 MB of source over the boot modules); PUC boot allocation 19 MB → 4 MB | kept. The build change is unverified on devkitPro and on hardware |

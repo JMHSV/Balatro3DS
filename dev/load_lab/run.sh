@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Load Lab: measure what boot and the first hand cost an Old 3DS. See README.md.
 #
-#   LOVE=<lovec.exe or love> LUA51=<PUC lua 5.1> bash dev/load_lab/run.sh [out_dir]
+#   LOVE=<lovec.exe or love> LUA51=<PUC lua 5.1> LUAC51=<its luac> bash dev/load_lab/run.sh [out_dir]
+#
+# LUAC51 is needed only while build.sh precompiles Lua.
 #
 # Run from the repository root. Writes <out_dir>/report.txt (default dev/load_lab/out/latest).
 set -euo pipefail
@@ -23,7 +25,7 @@ mkdir -p "$OUT"
 rm -f "$OUT"/trace.txt "$OUT"/puc_*.txt "$OUT"/report.txt
 
 "$PYTHON" dev/load_lab/score.py stage "$OUT"
-"$LOVE" . --load-lab --stage "$OUT/stage" --out "$OUT" >"$OUT/love.log" 2>&1 \
+"$LOVE" . --load-lab --stage "$OUT/stage_src" --out "$OUT" >"$OUT/love.log" 2>&1 \
     || { tail -30 "$OUT/love.log" >&2; exit 1; }
 [[ -f "$OUT/trace.txt" ]] || { tail -30 "$OUT/love.log" >&2; echo "no trace written" >&2; exit 1; }
 

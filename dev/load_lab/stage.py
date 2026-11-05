@@ -6,14 +6,23 @@ drift. On CI the working tree is a clean checkout, so the files considered are t
 knows about: tracked, plus untracked-but-not-ignored (a new module in a step being measured).
 
 Only .lua files are staged. Everything else in the package comes from `package_baseline.tsv`.
+
+When build.sh precompiles its stage (`precompile_lua`, which runs `dev/luac_3ds.py`), this does
+too, with the luac named by the `LUAC51` environment variable. Any Lua 5.1.5 luac works, because
+`luac_3ds.py` rewrites a 64-bit host's output into the console's layout. Two stages are written:
+
+    stage/      what ships: bytecode when the build precompiles, else source (the PUC driver)
+    stage_src/  the source before any precompile (the LÖVE driver; LuaJIT cannot load PUC bytecode)
 """
 
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -86,15 +95,40 @@ def staged_lua() -> dict[str, bytes]:
     return out
 
 
-def write_stage(dest: Path) -> dict[str, bytes]:
-    """Write the staged Lua to `dest` (emptied first) and return it. `FILES.txt` lists it, for
-    the PUC driver, which has no directory listing of its own."""
+def build_precompiles(build_sh: str) -> bool:
+    """Whether build.sh's packaging runs dev/luac_3ds.py over the stage."""
+    return re.search(r'luac_3ds\.py" "\$HOST_LUAC" "\$STAGE_DIR"', build_sh) is not None
+
+
+def _write(dest: Path, files: dict[str, bytes]) -> None:
     if dest.exists():
         shutil.rmtree(dest)
-    files = staged_lua()
     for path, data in files.items():
         target = dest / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+    # For the PUC driver, which has no directory listing of its own.
     (dest / "FILES.txt").write_text("".join(p + "\n" for p in sorted(files)), encoding="utf-8", newline="\n")
-    return files
+
+
+def read_stage(dest: Path) -> dict[str, bytes]:
+    return {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob("*.lua")}
+
+
+def write_stage(out: Path) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    """Write `out/stage_src` and `out/stage`, each emptied first. Returns (source, shipped)."""
+    source = staged_lua()
+    _write(out / "stage_src", source)
+    _write(out / "stage", source)
+    if not build_precompiles(BUILD_SH.read_text(encoding="utf-8")):
+        return source, source
+    luac = os.environ.get("LUAC51")
+    if not luac:
+        raise ValueError("build.sh precompiles Lua; set LUAC51 to a Lua 5.1.5 luac")
+    sys.path.insert(0, str(REPO / "dev"))
+    import luac_3ds
+    luac_3ds.compile_stage(luac, out / "stage")
+    shipped = read_stage(out / "stage")
+    if sorted(shipped) != sorted(source):
+        raise ValueError("precompiling changed the stage's file list")
+    return source, shipped

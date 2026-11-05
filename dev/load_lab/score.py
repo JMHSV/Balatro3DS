@@ -1,6 +1,7 @@
 """Load Lab score: estimated Old 3DS milliseconds from boot to the first hand dealt.
 
-    python dev/load_lab/score.py stage  <out>   write <out>/stage (the Lua a build ships)
+    python dev/load_lab/score.py stage  <out>   write <out>/stage (the Lua a build ships) and
+                                                <out>/stage_src (its source)
     python dev/load_lab/score.py report <out>   read the traces in <out>, write <out>/report.txt
 
 `run.sh` runs both around the drivers. The inputs to `report` are:
@@ -224,11 +225,14 @@ def check_drivers_agree(love: Trace, puc_run: Trace) -> None:
 
 def report(out: Path) -> str:
     build_sh = stage.BUILD_SH.read_text(encoding="utf-8")
-    stage_dir = out / "stage"
-    lua = {p.relative_to(stage_dir).as_posix(): p.read_bytes()
-           for p in stage_dir.rglob("*.lua")}
-    if lua != stage.staged_lua():
-        raise ValueError(f"{stage_dir} is stale; rerun `score.py stage`")
+    if stage.read_stage(out / "stage_src") != stage.staged_lua():
+        raise ValueError(f"{out / 'stage_src'} is stale; rerun `score.py stage`")
+    lua = stage.read_stage(out / "stage")
+    precompiled = {p for p, data in lua.items() if data[:4] == b"\x1bLua"}
+    want = set(lua) if stage.build_precompiles(build_sh) else set()
+    if precompiled != want:
+        raise ValueError(f"{out / 'stage'} is not packaged the way build.sh packages it; "
+                         "rerun `score.py stage`")
     pkg = package_model.build(lua, build_sh)
     cia_pkg = pkg
 
@@ -268,12 +272,14 @@ def report(out: Path) -> str:
     lines.append("")
 
     lines.append("summary\tboot\thand")
-    def lua_bytes(ph):
-        return sum(m["bytes"] for m in love.modules if m["phase"] == ph)
+    def lua_bytes(ph, bytecode):
+        return sum(pkg[m["path"]].size for m in love.modules
+                   if m["phase"] == ph and (m["path"] in precompiled) == bytecode)
     def lua_count(ph):
         return sum(1 for m in love.modules if m["phase"] == ph)
-    for label, fn in (("lua_modules", lua_count), ("lua_source_bytes", lua_bytes)):
-        lines.append(f"{label}\t{fn('boot')}\t{fn('hand')}")
+    lines.append(f"lua_modules\t{lua_count('boot')}\t{lua_count('hand')}")
+    lines.append(f"lua_source_bytes_compiled\t{lua_bytes('boot', False)}\t{lua_bytes('hand', False)}")
+    lines.append(f"lua_bytecode_bytes_loaded\t{lua_bytes('boot', True)}\t{lua_bytes('hand', True)}")
     for label, key in (("files_opened", "open"), ("stats", "stat")):
         lines.append(f"{label}\t{parts['boot'].count[key]}\t{parts['hand'].count[key]}")
     for label, key in (("bytes_read", "read"), ("bytes_inflated", "inflate"), ("texture_bytes_decoded", "decode")):
@@ -285,7 +291,7 @@ def report(out: Path) -> str:
     lines.append(f"hand_frames\t\t{love.stats.get(('hand', 'frames'), '')}")
     lines.append("")
 
-    lines.append("module\tphase\tsource_bytes\tzip_bytes\tcompile_ms\tself_exec_ms")
+    lines.append("module\tphase\tshipped_bytes\tzip_bytes\tload_ms\tself_exec_ms")
     for m in love.modules:
         p = m["path"]
         e = pkg[p]
@@ -313,8 +319,9 @@ def main(argv: list[str]) -> int:
         return 2
     out = Path(argv[2])
     if argv[1] == "stage":
-        files = stage.write_stage(out / "stage")
-        print(f"[load-lab] staged {len(files)} Lua files to {out / 'stage'}")
+        source, shipped = stage.write_stage(out)
+        kind = "bytecode" if shipped != source else "source"
+        print(f"[load-lab] staged {len(shipped)} Lua files ({kind}) to {out / 'stage'}")
         return 0
     text = report(out)
     (out / "report.txt").write_text(text, encoding="utf-8", newline="\n")

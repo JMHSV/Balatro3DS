@@ -50,6 +50,7 @@ done
 
 ELF="$(find_lovepotion_elf || true)"
 [[ -n "$ELF" ]] || die "no LövePotion runtime built; run ./dev/setup.sh"
+[[ -x "$HOST_LUAC" ]] || die "host luac missing; run ./dev/setup.sh"
 
 mkdir -p "$STAGE_DIR" "$BUILD_DIR" "$DIST_DIR" "$ASSET_CACHE"
 
@@ -332,8 +333,16 @@ prepare_build_info() {
     fi
 }
 
+# Ship Lua as 5.1 bytecode, so the console loads it instead of compiling it. Same file names,
+# same chunk names and line info; see dev/luac_3ds.py for why the bytecode is the console's.
+precompile_lua() {
+    info "precompiling Lua"
+    python3 "$DEV_DIR/luac_3ds.py" "$HOST_LUAC" "$STAGE_DIR" >/dev/null
+}
+
 build_3dsx() {
     prepare_build_info 3dsx
+    precompile_lua
     info "packaging .3dsx"
     # Textures, PCM cues and Vorbis are stored, not deflated. They barely compress (tex3ds
     # already packs a .t3x; zip saves 15% on them and on .wav, nothing on .ogg), so deflate
@@ -359,6 +368,7 @@ build_cia() {
     fi
 
     prepare_build_info cia
+    precompile_lua
 
     local romfs="$BUILD_DIR/romfs" banner_audio="$DEV_DIR/cia/banner.wav"
 

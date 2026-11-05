@@ -106,6 +106,13 @@ LOVEPOTION_ELF="$LOVEPOTION_BUILD/lovepotion.elf"
 DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 DEVKITARM="${DEVKITARM:-$DEVKITPRO/devkitARM}"
 
+# Host Lua compiler for precompiling the game (dev/luac_3ds.py). It must be the console's Lua:
+# devkitPro's 3ds-liblua51 builds this same tarball, pinned to this same checksum.
+LUA51_VERSION="5.1.5"
+LUA51_URL="https://www.lua.org/ftp/lua-$LUA51_VERSION.tar.gz"
+LUA51_SHA256="2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333"
+HOST_LUAC="${HOST_LUAC:-$TOOLS_DIR/luac-$LUA51_VERSION}"
+
 MAKEROM_VERSION="v0.19.0"
 MAKEROM="${MAKEROM:-$TOOLS_DIR/makerom}"
 BANNERTOOL="${BANNERTOOL:-$TOOLS_DIR/bannertool}"
