@@ -10,3 +10,4 @@ The checks for every kept step:
 | # | Change | score_ms before → after | Main parts moved | Verdict |
 | --- | --- | --- | --- | --- |
 | 0 | Harness, baseline at 39dd0e2 | 10395 | — | baseline |
+| 1 | `zip -n .t3x:.wav:.ogg`: store textures, cues and music in game.love | 10395 → 9662 (−7.1%) | inflate 1700 → 886; read 1214 → 1196 (music stream reads 80 KiB, not 847 KB) | kept |

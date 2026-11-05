@@ -335,7 +335,12 @@ prepare_build_info() {
 build_3dsx() {
     prepare_build_info 3dsx
     info "packaging .3dsx"
-    ( cd "$STAGE_DIR" && rm -f "$BUILD_DIR/game.love" && zip -qr "$BUILD_DIR/game.love" . )
+    # Textures, PCM cues and Vorbis are stored, not deflated. They barely compress (tex3ds
+    # already packs a .t3x; zip saves 15% on them and on .wav, nothing on .ogg), so deflate
+    # only adds an inflate of every byte on load. A deflated stream is worse still: vorbisfile
+    # seeks to the end on open, and PhysFS inflates its way there. Fonts and Lua compress
+    # 4-10x and stay deflated, because reading the difference would cost more than inflating it.
+    ( cd "$STAGE_DIR" && rm -f "$BUILD_DIR/game.love" && zip -qr -n .t3x:.wav:.ogg "$BUILD_DIR/game.love" . )
     3dsxtool "$ELF" "$BUILD_DIR/base.3dsx" \
         --smdh="$SMDH" \
         --romfs="$LOVEPOTION_DIR/platform/ctr/romfs"

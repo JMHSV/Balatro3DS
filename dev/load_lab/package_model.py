@@ -6,7 +6,7 @@ staged Lua, deflated here at zlib level 6 -- Info-ZIP's default, and within 0.1%
 over all its Lua. The packaging step's own options are read from build.sh's `zip` command, so
 a change there is modelled from the build script itself:
 
-  -n .a:.b   store files with these suffixes (Info-ZIP compares case-insensitively)
+  -n .a:.b   store files with these suffixes (Info-ZIP 3.0 on Linux matches case-sensitively)
   -0         store everything
 
 Info-ZIP also stores any file that deflate would not shrink; so does this model.
@@ -42,7 +42,7 @@ def zip_options(build_sh: str) -> tuple[bool, tuple[str, ...]]:
     while i < len(args):
         a = args[i]
         if a == "-n":
-            suffixes = tuple(s.lower() for s in args[i + 1].split(":") if s)
+            suffixes = tuple(s for s in args[i + 1].split(":") if s)
             i += 2
             continue
         if not a.startswith("-"):
@@ -76,7 +76,7 @@ def build(lua: dict[str, bytes], build_sh: str) -> dict[str, Entry]:
     entries: dict[str, Entry] = {}
 
     def add(path: str, size: int, deflated_size: int) -> None:
-        store = store_all or path.lower().endswith(suffixes) or deflated_size >= size
+        store = store_all or path.endswith(suffixes) or deflated_size >= size
         entries[path] = Entry(path, size, size if store else deflated_size, not store)
 
     for path, (size, deflated_size) in read_manifest().items():
