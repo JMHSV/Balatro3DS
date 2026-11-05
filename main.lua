@@ -1,3 +1,12 @@
+-- Desktop load-time harness (`dev/load_lab`). First, so it sees every require of boot. `dev/` is
+-- never staged into a console build and the flag is never on a console's command line, so on
+-- hardware this is a scan of `arg` and nothing else.
+if type(arg) == "table" then
+    for _, a in ipairs(arg) do
+        if a == "--load-lab" then require("dev.load_lab").install(arg) break end
+    end
+end
+
 local raw_print = print
 function print(...)
     if G and G.DEBUG then
